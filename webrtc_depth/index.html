@@ -54,10 +54,12 @@
 
 <body>
 
-  <video id="localVideo" autoplay muted></video>
+  <video id="localVideo" autoplay muted style="display:none"></video>
   <video id="localDepthVideo" autoplay muted></video>
+    <canvas id="rgbd_canvas" width="320" height="240"></canvas>
   <video id="remoteVideo" autoplay muted></video>
   <video id="remoteDepthVideo" autoplay muted></video>
+    
   <div>
     <button id="startButton">Start</button>
     <button id="callButton">Call</button>
@@ -247,7 +249,7 @@ function start() {
   startButton.disabled = true;
   navigator.getUserMedia = navigator.getUserMedia ||
     navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
-  navigator.getUserMedia({audio:true, video:{'mandatory': {'depth': 'rgbd'}}}, gotStream,
+  navigator.getUserMedia({audio:true, video:true}, gotStream,
     function(error) {
       trace("navigator.getUserMedia error: ", error);
     });
@@ -334,107 +336,179 @@ function gotRemoteIceCandidate(event){
 }
 
 function startRendering(container, depthVideo, rgbVideo) {
-  var camera = new THREE.PerspectiveCamera( 50, container_width / container_height, 1, 10000 );
-  camera.position.set( 0, 0, 500 );
+    var camera = new THREE.PerspectiveCamera( 50, container_width / container_height, 1, 10000 );
+    camera.position.set( 0, 0, 500 );
 
-  var scene = new THREE.Scene();
-  var center = new THREE.Vector3();
-  center.z = - 1000;
+    var scene = new THREE.Scene();
+    var center = new THREE.Vector3();
+    center.z = - 1000;
 
-  var depth_canvas = document.createElement( 'canvas');
-  depth_canvas.width = 320;
-  depth_canvas.height = 240;
-  var depth_context = depth_canvas.getContext('2d');
-  var color_canvas = document.createElement( 'canvas');
-  color_canvas.width = 320;
-  color_canvas.height = 240;
-  var color_context = color_canvas.getContext('2d');
-  var depth_texture;
-  var color_texture;
-  var geometry;
-  var material;
+    var depth_canvas = document.createElement( 'canvas');
+    depth_canvas.width = 320;
+    depth_canvas.height = 240;
+    var depth_context = depth_canvas.getContext('2d');
+    var color_canvas = document.createElement( 'canvas');
+    color_canvas.width = 640;
+    color_canvas.height = 480;
+    var color_context = color_canvas.getContext('2d');
+    var rgbd_canvas = document.getElementById('rgbd_canvas');
+    rgbd_canvas.display = "block";
+    rgbd_canvas.width = 320;
+    rgbd_canvas.height = 240;
+    var rgbd_context = rgbd_canvas.getContext('2d');
+    var depth_texture;
+    var color_texture;
+    var geometry;
+    var material;
 
-  function VideoReady() {
-    depth_texture = new THREE.Texture( depth_canvas );
-    color_texture = new THREE.Texture( color_canvas );
+    function VideoReady() {
+        depth_texture = new THREE.Texture( depth_canvas );
+        color_texture = new THREE.Texture( rgbd_canvas );
 
-    var width = 320, height = 240;
+        var width = 320, height = 240;
 
-    geometry = new THREE.Geometry();
+        geometry = new THREE.Geometry();
 
-    for ( var i = 0, l = width * height; i < l; i ++ ) {
+        for ( var i = 0, l = width * height; i < l; i ++ ) {
 
-        var vertex = new THREE.Vector3();
-        vertex.x = ( i % width );
-        vertex.y = Math.floor( i / width );
+            var vertex = new THREE.Vector3();
+            vertex.x = ( i % width );
+            vertex.y = Math.floor( i / width );
 
-        geometry.vertices.push( vertex );
+            geometry.vertices.push( vertex );
+
+        }
+
+        material = new THREE.ShaderMaterial( {
+
+            uniforms: {
+
+                "map": { type: "t", value: depth_texture },
+                "rgbMap": {type: "t", value: color_texture },
+                "width": { type: "f", value: width },
+                "height": { type: "f", value: height },
+                "nearClipping": { type: "f", value: nearClipping },
+                "farClipping": { type: "f", value: farClipping },
+                "depthEncoding": { type: "f", value: 0},
+                "pointSize": { type: "f", value: pointSize },
+                "zOffset": { type: "f", value: zOffset }
+
+            },
+            vertexShader: document.getElementById( 'vs' ).textContent,
+            fragmentShader: document.getElementById( 'fs' ).textContent,
+            depthTest: false, depthWrite: false,
+            transparent: true
+
+        } );
+
+        var mesh = new THREE.ParticleSystem( geometry, material );
+        mesh.position.x = 0;
+        mesh.position.y = 0;
+        scene.add( mesh );
+
+        var gui = new dat.GUI({autoPlace: false});
+        container.appendChild(gui.domElement);
+        gui.domElement.style.position = "absolute";
+        gui.domElement.style.top = "0px";
+        gui.domElement.style.right = "5px";
+        gui.add( material.uniforms.nearClipping, 'value', 1, 10000, 1.0 ).name( 'nearClipping' );
+        gui.add( material.uniforms.farClipping, 'value', 1, 10000, 1.0 ).name( 'farClipping' );
+        gui.add( material.uniforms.pointSize, 'value', 1, 10, 1.0 ).name( 'pointSize' );
+        gui.add( material.uniforms.zOffset, 'value', 0, 4000, 1.0 ).name( 'zOffset' );
+        gui.add( material.uniforms.depthEncoding, 'value', { Grayscale: 0, Adaptive: 1, Raw: 2 } ).name('Depth Encoding');
+        gui.close();
+
+        var intervalId = setInterval(drawVideo, 1000 / 30 );
+        animate();
 
     }
 
-    material = new THREE.ShaderMaterial( {
+    var renderer = new THREE.WebGLRenderer();
+    renderer.setSize( container_width, container_height );
+    container.appendChild( renderer.domElement );
 
-        uniforms: {
+    var mouse = new THREE.Vector3( 0, 0, 1 );
 
-            "map": { type: "t", value: depth_texture },
-            "rgbMap": {type: "t", value: color_texture },
-            "width": { type: "f", value: width },
-            "height": { type: "f", value: height },
-            "nearClipping": { type: "f", value: nearClipping },
-            "farClipping": { type: "f", value: farClipping },
-            "depthEncoding": { type: "f", value: 0},
-            "pointSize": { type: "f", value: pointSize },
-            "zOffset": { type: "f", value: zOffset }
+    window.addEventListener( 'mousemove', onDocumentMouseMove, false );
 
+    requestAnimationFrame(VideoReady);
+
+    var cameraParams = {
+        d: {
+            cx: 160,
+            cy: 120,
+            fx: 224.501999,
+            fy: 230.494003
         },
-        vertexShader: document.getElementById( 'vs' ).textContent,
-        fragmentShader: document.getElementById( 'fs' ).textContent,
-        depthTest: false, depthWrite: false,
-        transparent: true
+        rgb: {
+            cx: 320.000000,
+            cy: 240.000000,
+            fx: 587.452087,
+            fy: 600.674561
+        },
+        r: {
+            r11:0.999711, r12:0.001065, r13:-0.024007, r21:0.001455, r22:-0.999867, r23:0.016223, r31:0.023986, r32:0.016253, r33:0.999580
+        },
+        t: {
+            x: 0.026000, y:-0.000508, z:-0.000863
+        }
+  };
 
-    } );
-
-    var mesh = new THREE.ParticleSystem( geometry, material );
-    mesh.position.x = 0;
-    mesh.position.y = 0;
-    scene.add( mesh );
-
-    var gui = new dat.GUI({autoPlace: false});
-    container.appendChild(gui.domElement);
-    gui.domElement.style.position = "absolute";
-    gui.domElement.style.top = "0px";
-    gui.domElement.style.right = "5px";
-    gui.add( material.uniforms.nearClipping, 'value', 1, 10000, 1.0 ).name( 'nearClipping' );
-    gui.add( material.uniforms.farClipping, 'value', 1, 10000, 1.0 ).name( 'farClipping' );
-    gui.add( material.uniforms.pointSize, 'value', 1, 10, 1.0 ).name( 'pointSize' );
-    gui.add( material.uniforms.zOffset, 'value', 0, 4000, 1.0 ).name( 'zOffset' );
-    gui.add( material.uniforms.depthEncoding, 'value', { Grayscale: 0, Adaptive: 1, Raw: 2 } ).name('Depth Encoding');
-    gui.close();
-
-    var intervalId = setInterval(drawVideo, 1000 / 30 );
-    animate();
-
+  function caliberate() {
+      depth_context.drawImage(depthVideo, 0, 0, depth_canvas.width, depth_canvas.height);
+      color_context.drawImage(rgbVideo, 0, 0, color_canvas.width, color_canvas.height);
+      var colorImageData = color_context.getImageData(0, 0, color_canvas.width, color_canvas.height);
+      var depthImageData = depth_context.getImageData(0, 0, depth_canvas.width, depth_canvas.height);
+      var rgbdImageData = rgbd_context.getImageData(0, 0, rgbd_canvas.width, rgbd_canvas.height);
+      var arr_index = 0;
+      for (var i = 0 ; i < depth_canvas.height; ++i) {
+          for (var j = 0; j < depth_canvas.width; ++j, arr_index += 4) {
+              var dx = j;
+              var dy = i;
+              var r = depthImageData.data[arr_index];
+              var g = depthImageData.data[arr_index + 1];
+              var b = depthImageData.data[arr_index + 2];
+              var d = b * 256. +
+                  g * 4. + 
+                  r / 8.;
+              var dz = d / 1000.0; // depth value to meters
+              /*
+              P3D.x = (x_d - cx_d) * depth(x_d,y_d) / fx_d
+              P3D.y = (y_d - cy_d) * depth(x_d,y_d) / fy_d
+              P3D.z = depth(x_d,y_d)
+              */
+              var p3dx = (dx - cameraParams.d.cx) * dz / cameraParams.d.fx;
+              var p3dy = (dy - cameraParams.d.cy) * dz / cameraParams.d.fy;
+              var rx = cameraParams.r.r11 * p3dx - cameraParams.r.r12 * p3dy + cameraParams.r.r13 * dz + cameraParams.t.x;
+              var ry = cameraParams.r.r21 * p3dx - cameraParams.r.r22 * p3dy + cameraParams.r.r23 * dz + cameraParams.t.y;
+              var rz = cameraParams.r.r31 * p3dx - cameraParams.r.r32 * p3dy + cameraParams.r.r33 * dz + cameraParams.t.z;
+              /*
+              P2D_rgb.x = (P3D'.x * fx_rgb / P3D'.z) + cx_rgb
+              P2D_rgb.y = (P3D'.y * fy_rgb / P3D'.z) + cy_rgb
+              */
+              var rgbx = rx * cameraParams.rgb.fx / rz + cameraParams.rgb.cx;
+              var rgby = ry * cameraParams.rgb.fy / rz + cameraParams.rgb.cy;
+              var rgb_index = 4 * ((~~rgbx) + (~~rgby) * color_canvas.width);
+              rgbdImageData.data[arr_index] = colorImageData.data[rgb_index];
+              rgbdImageData.data[arr_index + 1] = colorImageData.data[rgb_index + 1];
+              rgbdImageData.data[arr_index + 2] = colorImageData.data[rgb_index + 2];
+              rgbdImageData.data[arr_index + 3] = 255;
+          }
+      }
+      rgbd_context.putImageData(rgbdImageData, 0, 0);
   }
 
-  var renderer = new THREE.WebGLRenderer();
-  renderer.setSize( container_width, container_height );
-  container.appendChild( renderer.domElement );
-
-  var mouse = new THREE.Vector3( 0, 0, 1 );
-
-  window.addEventListener( 'mousemove', onDocumentMouseMove, false );
-
-  requestAnimationFrame(VideoReady);
-
   function drawVideo() {
-    if ( depthVideo.readyState === depthVideo.HAVE_ENOUGH_DATA ) {
-        depth_context.drawImage(depthVideo, 0, 0, depth_canvas.width, depth_canvas.height);
+      if (depthVideo.readyState === depthVideo.HAVE_ENOUGH_DATA && rgbVideo.readyState === rgbVideo.HAVE_ENOUGH_DATA) {
+          //depth_context.drawImage(depthVideo, 0, 0, depth_canvas.width, depth_canvas.height);
+          caliberate();
         depth_texture.needsUpdate = true;
-    }
-    if ( rgbVideo.readyState === rgbVideo.HAVE_ENOUGH_DATA ) {
-        color_context.drawImage(rgbVideo, 0, 0, color_canvas.width, color_canvas.height);
         color_texture.needsUpdate = true;
     }
+    //if ( rgbVideo.readyState === rgbVideo.HAVE_ENOUGH_DATA ) {
+     //   color_context.drawImage(rgbVideo, 0, 0, color_canvas.width, color_canvas.height);
+    //    color_texture.needsUpdate = true;
+    //}
   }
 
   function onDocumentMouseMove( event ) {
